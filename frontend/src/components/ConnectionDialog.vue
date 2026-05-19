@@ -91,7 +91,6 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { NModal, NTabs, NTabPane } from 'naive-ui'
 import { useConnectionStore, type RedisConnection } from '@/stores/connection'
 
 const props = defineProps<{ editData?: RedisConnection | null }>()

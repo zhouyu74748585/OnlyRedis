@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -447,6 +448,29 @@ func (rs *RedisService) BrowseKeys(connID, parentPath string, cursor uint64, cou
 		}
 	}
 
+	// Sort: folders first, then leaves grouped by type, alphabetically within each group
+	typeOrder := map[string]int{"string": 1, "hash": 2, "list": 3, "set": 4, "zset": 5}
+	sort.Slice(nodeOrder, func(i, j int) bool {
+		a, b := nodeMap[nodeOrder[i]], nodeMap[nodeOrder[j]]
+		orderA, orderB := 0, 0
+		if a.IsLeaf {
+			orderA = typeOrder[a.KeyType]
+			if orderA == 0 {
+				orderA = 99 // unknown type goes last
+			}
+		}
+		if b.IsLeaf {
+			orderB = typeOrder[b.KeyType]
+			if orderB == 0 {
+				orderB = 99
+			}
+		}
+		if orderA != orderB {
+			return orderA < orderB
+		}
+		return a.FullKey < b.FullKey
+	})
+
 	// Build result preserving order
 	nodes := make([]BrowseNode, 0, len(nodeOrder))
 	for _, key := range nodeOrder {
@@ -540,6 +564,22 @@ func (rs *RedisService) ScanKeys(connID, pattern string, cursor uint64, count in
 			TTL:  int64(ttl.Seconds()),
 		})
 	}
+
+	// Sort: grouped by type, then alphabetically within each group
+	typeOrder := map[string]int{"string": 1, "hash": 2, "list": 3, "set": 4, "zset": 5}
+	sort.Slice(keyInfos, func(i, j int) bool {
+		orderA, orderB := typeOrder[keyInfos[i].Type], typeOrder[keyInfos[j].Type]
+		if orderA == 0 {
+			orderA = 99
+		}
+		if orderB == 0 {
+			orderB = 99
+		}
+		if orderA != orderB {
+			return orderA < orderB
+		}
+		return keyInfos[i].Key < keyInfos[j].Key
+	})
 
 	result := ScanResult{Keys: keyInfos, Cursor: nextCursor}
 	data, _ := json.Marshal(result)

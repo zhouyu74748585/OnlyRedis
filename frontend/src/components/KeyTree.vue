@@ -221,7 +221,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { Key as KeyIcon, RefreshCw, Search, Plus, Copy, Trash2, Type, Hash, List, Box, Sliders } from 'lucide-vue-next'
-import { NModal } from 'naive-ui'
 import { useKeyStore } from '@/stores/key'
 import TreeNode from '@/components/TreeNode.vue'
 

@@ -65,7 +65,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { Sliders, Trash } from 'lucide-vue-next'
-import { NModal } from 'naive-ui'
 
 const props = defineProps<{ connId: string; keyName: string }>()
 

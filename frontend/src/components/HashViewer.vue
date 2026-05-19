@@ -141,7 +141,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from 'vue'
 import { Hash, Trash } from 'lucide-vue-next'
-import { NModal } from 'naive-ui'
 import { useConnectionStore } from '../stores/connection'
 
 const props = defineProps<{ connId: string; keyName: string }>()
