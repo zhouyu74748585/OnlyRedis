@@ -39,16 +39,18 @@ type HashField struct {
 
 // HashScanResult represents paginated hash scan result
 type HashScanResult struct {
-	Fields []HashField `json:"fields"`
-	Total  int         `json:"total"`
-	Cursor uint64      `json:"cursor"`
+	Fields    []HashField `json:"fields"`
+	Total     int         `json:"total"`
+	Cursor    uint64      `json:"cursor"`
+	Truncated bool        `json:"truncated"` // true when fetchAll exceeded safety cap
 }
 
 // SetScanResult represents paginated set scan result
 type SetScanResult struct {
-	Members []string `json:"members"`
-	Total   int      `json:"total"`
-	Cursor  uint64   `json:"cursor"`
+	Members   []string `json:"members"`
+	Total     int      `json:"total"`
+	Cursor    uint64   `json:"cursor"`
+	Truncated bool     `json:"truncated"` // true when fetchAll exceeded safety cap
 }
 
 // ZSetEntry represents a sorted set entry
@@ -59,9 +61,10 @@ type ZSetEntry struct {
 
 // ZSetScanResult represents paginated zset scan result
 type ZSetScanResult struct {
-	Entries []ZSetEntry `json:"entries"`
-	Total   int         `json:"total"`
-	Cursor  uint64      `json:"cursor"`
+	Entries   []ZSetEntry `json:"entries"`
+	Total     int         `json:"total"`
+	Cursor    uint64      `json:"cursor"`
+	Truncated bool        `json:"truncated"` // true when fetchAll exceeded safety cap
 }
 
 // RedisService manages all Redis client interactions
@@ -735,50 +738,109 @@ func (rs *RedisService) SetStringValue(connID, key, value string, ttl int64) err
 
 // HashScan scans hash fields with pagination.
 // withTTL: if true, fetches per-field TTL using HTTL (requires Redis ≥ 7.4.0)
+// When count == -1, fetches ALL fields in a SCAN loop (safe cap 10000).
 func (rs *RedisService) HashScan(connID, key string, cursor uint64, count int64, withTTL bool) string {
 	client, err := rs.getClient(connID)
 	if err != nil {
 		log.Printf("[Redis] HashScan: conn=%s, key=%s, err=%v", connID, key, err)
 		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
 	}
-	if count <= 0 {
-		count = 100
+
+	const maxFields = 10000
+	fetchAll := count == -1
+	if count <= 0 || fetchAll {
+		count = 1000
 	}
 
 	ctx := context.Background()
 	total, _ := client.HLen(ctx, key).Result()
-	fields, nextCursor, err := client.HScan(ctx, key, cursor, "*", count).Result()
-	if err != nil {
-		log.Printf("[Redis] HashScan: hscan failed, conn=%s, key=%s, err=%v", connID, key, err)
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
-	}
-
-	log.Printf("[Redis] HashScan: conn=%s, key=%s, total=%d, fetched=%d, withTTL=%v", connID, key, total, len(fields)/2, withTTL)
 
 	var fieldList []HashField
-	for i := 0; i < len(fields); i += 2 {
-		fieldList = append(fieldList, HashField{Field: fields[i], Value: fields[i+1], TTL: -2})
+	scanCursor := cursor
+
+	for {
+		fields, nextCursor, err := client.HScan(ctx, key, scanCursor, "*", count).Result()
+		if err != nil {
+			log.Printf("[Redis] HashScan: hscan failed, conn=%s, key=%s, err=%v", connID, key, err)
+			return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		}
+
+		for i := 0; i < len(fields); i += 2 {
+			fieldList = append(fieldList, HashField{Field: fields[i], Value: fields[i+1], TTL: -2})
+		}
+
+		scanCursor = nextCursor
+		if !fetchAll || scanCursor == 0 || len(fieldList) >= maxFields {
+			break
+		}
 	}
 
-	// Fetch per-field TTLs using HTTL command (Redis ≥ 7.4.0)
+	truncated := fetchAll && len(fieldList) >= maxFields && int(total) > maxFields
+	log.Printf("[Redis] HashScan: conn=%s, key=%s, total=%d, fetched=%d, withTTL=%v, fetchAll=%v, truncated=%v", connID, key, total, len(fieldList), withTTL, fetchAll, truncated)
+
+	// Fetch per-field TTLs using batch HTTL command (Redis ≥ 7.4.0)
+	// HTTL key FIELDS numfields field [field ...]
 	if withTTL && len(fieldList) > 0 {
-		pipe := client.Pipeline()
-		ttlCmds := make([]*redis.Cmd, len(fieldList))
-		for i, f := range fieldList {
-			ttlCmds[i] = pipe.Do(ctx, "HTTL", key, f.Field)
+		args := make([]interface{}, 0, len(fieldList)+4)
+		args = append(args, "HTTL", key, "FIELDS", len(fieldList))
+		for _, f := range fieldList {
+			args = append(args, f.Field)
 		}
-		_, pipeErr := pipe.Exec(ctx)
-		if pipeErr != nil {
-			log.Printf("[Redis] HashScan: HTTL pipeline failed, conn=%s, key=%s, err=%v", connID, key, pipeErr)
+		vals, err := client.Do(ctx, args...).Slice()
+		if err != nil {
+			log.Printf("[Redis] HashScan: HTTL batch failed, conn=%s, key=%s, fields=%d, err=%v", connID, key, len(fieldList), err)
 		} else {
-			for i, cmd := range ttlCmds {
-				ttl, _ := cmd.Int()
-				fieldList[i].TTL = int64(ttl)
+			for i := 0; i < len(vals) && i < len(fieldList); i++ {
+				fieldList[i].TTL = vals[i].(int64)
 			}
 		}
 	}
 
-	result := HashScanResult{Fields: fieldList, Total: int(total), Cursor: nextCursor}
+	result := HashScanResult{Fields: fieldList, Total: int(total), Cursor: scanCursor, Truncated: truncated}
+	data, _ := json.Marshal(result)
+	return string(data)
+}
+
+// HashSearch searches hash field names via HSCAN MATCH pattern (backend search, no truncation limit).
+// pattern is glob-style, prepended/appended with * for substring match.
+func (rs *RedisService) HashSearch(connID, key, pattern string) string {
+	client, err := rs.getClient(connID)
+	if err != nil {
+		log.Printf("[Redis] HashSearch: conn=%s, key=%s, err=%v", connID, key, err)
+		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+	}
+	if pattern == "" {
+		return `{"fields":[],"total":0}`
+	}
+
+	matchPattern := "*" + pattern + "*"
+	ctx := context.Background()
+
+	var fieldList []HashField
+	var scanCursor uint64
+	const maxFields = 10000
+
+	for {
+		fields, nextCursor, err := client.HScan(ctx, key, scanCursor, matchPattern, 1000).Result()
+		if err != nil {
+			log.Printf("[Redis] HashSearch: hscan failed, conn=%s, key=%s, pattern=%s, err=%v", connID, key, matchPattern, err)
+			return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		}
+		for i := 0; i < len(fields); i += 2 {
+			fieldList = append(fieldList, HashField{Field: fields[i], Value: fields[i+1], TTL: -2})
+		}
+		scanCursor = nextCursor
+		if scanCursor == 0 || len(fieldList) >= maxFields {
+			break
+		}
+	}
+
+	if fieldList == nil {
+		fieldList = []HashField{}
+	}
+
+	log.Printf("[Redis] HashSearch: conn=%s, key=%s, pattern=%s, found=%d", connID, key, matchPattern, len(fieldList))
+	result := HashScanResult{Fields: fieldList, Total: len(fieldList)}
 	data, _ := json.Marshal(result)
 	return string(data)
 }
@@ -823,6 +885,21 @@ func (rs *RedisService) ListRange(connID, key string, start, stop int64) string 
 	return string(data)
 }
 
+// ListLen returns the length of a list
+func (rs *RedisService) ListLen(connID, key string) int64 {
+	client, err := rs.getClient(connID)
+	if err != nil {
+		log.Printf("[Redis] ListLen: conn=%s, key=%s, err=%v", connID, key, err)
+		return 0
+	}
+	n, err := client.LLen(context.Background(), key).Result()
+	if err != nil {
+		log.Printf("[Redis] ListLen: llen failed, conn=%s, key=%s, err=%v", connID, key, err)
+		return 0
+	}
+	return n
+}
+
 // ListPush pushes elements to the list
 func (rs *RedisService) ListPush(connID, key, value string, left bool) int64 {
 	client, err := rs.getClient(connID)
@@ -859,30 +936,89 @@ func (rs *RedisService) ListRemove(connID, key, value string, count int64) int64
 
 // --- Set Operations ---
 
-// SetMembers retrieves set members with pagination
+// SetMembers retrieves set members.
+// When count == -1, fetches ALL members in a SCAN loop (safe cap 10000).
 func (rs *RedisService) SetMembers(connID, key string, cursor uint64, count int64) string {
 	client, err := rs.getClient(connID)
 	if err != nil {
 		log.Printf("[Redis] SetMembers: conn=%s, key=%s, err=%v", connID, key, err)
 		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
 	}
-	if count <= 0 {
-		count = 500
+
+	const maxMembers = 10000
+	fetchAll := count == -1
+	if count <= 0 || fetchAll {
+		count = 1000
 	}
 
 	ctx := context.Background()
 	total, _ := client.SCard(ctx, key).Result()
-	members, nextCursor, err := client.SScan(ctx, key, cursor, "*", count).Result()
-	if err != nil {
-		log.Printf("[Redis] SetMembers: sscan failed, conn=%s, key=%s, err=%v", connID, key, err)
-		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+
+	var members []string
+	scanCursor := cursor
+
+	for {
+		batch, nextCursor, err := client.SScan(ctx, key, scanCursor, "*", count).Result()
+		if err != nil {
+			log.Printf("[Redis] SetMembers: sscan failed, conn=%s, key=%s, err=%v", connID, key, err)
+			return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		}
+		members = append(members, batch...)
+		scanCursor = nextCursor
+		if !fetchAll || scanCursor == 0 || len(members) >= maxMembers {
+			break
+		}
 	}
+
 	if members == nil {
 		members = []string{}
 	}
 
-	log.Printf("[Redis] SetMembers: conn=%s, key=%s, total=%d, fetched=%d", connID, key, total, len(members))
-	result := SetScanResult{Members: members, Total: int(total), Cursor: nextCursor}
+	truncated := fetchAll && len(members) >= maxMembers && int(total) > maxMembers
+	log.Printf("[Redis] SetMembers: conn=%s, key=%s, total=%d, fetched=%d, fetchAll=%v, truncated=%v", connID, key, total, len(members), fetchAll, truncated)
+	result := SetScanResult{Members: members, Total: int(total), Cursor: scanCursor, Truncated: truncated}
+	data, _ := json.Marshal(result)
+	return string(data)
+}
+
+// SetSearch searches set members via SSCAN MATCH pattern (backend search, no truncation limit).
+// pattern is glob-style, prepended/appended with * for substring match.
+func (rs *RedisService) SetSearch(connID, key, pattern string) string {
+	client, err := rs.getClient(connID)
+	if err != nil {
+		log.Printf("[Redis] SetSearch: conn=%s, key=%s, err=%v", connID, key, err)
+		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+	}
+	if pattern == "" {
+		return `{"members":[],"total":0}`
+	}
+
+	matchPattern := "*" + pattern + "*"
+	ctx := context.Background()
+
+	var members []string
+	var scanCursor uint64
+	const maxMembers = 10000
+
+	for {
+		batch, nextCursor, err := client.SScan(ctx, key, scanCursor, matchPattern, 1000).Result()
+		if err != nil {
+			log.Printf("[Redis] SetSearch: sscan failed, conn=%s, key=%s, pattern=%s, err=%v", connID, key, matchPattern, err)
+			return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		}
+		members = append(members, batch...)
+		scanCursor = nextCursor
+		if scanCursor == 0 || len(members) >= maxMembers {
+			break
+		}
+	}
+
+	if members == nil {
+		members = []string{}
+	}
+
+	log.Printf("[Redis] SetSearch: conn=%s, key=%s, pattern=%s, found=%d", connID, key, matchPattern, len(members))
+	result := SetScanResult{Members: members, Total: len(members)}
 	data, _ := json.Marshal(result)
 	return string(data)
 }
@@ -907,34 +1043,121 @@ func (rs *RedisService) SetRemove(connID, key, member string) error {
 
 // --- ZSet Operations ---
 
-// ZSetScan scans sorted set entries with pagination
+// ZSetScan scans sorted set entries.
+// When count == -1, fetches ALL entries in a SCAN loop (safe cap 10000).
 func (rs *RedisService) ZSetScan(connID, key string, cursor uint64, count int64) string {
 	client, err := rs.getClient(connID)
 	if err != nil {
 		log.Printf("[Redis] ZSetScan: conn=%s, key=%s, err=%v", connID, key, err)
 		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
 	}
-	if count <= 0 {
-		count = 200
+
+	const maxEntries = 10000
+	fetchAll := count == -1
+	if count <= 0 || fetchAll {
+		count = 1000
 	}
 
 	ctx := context.Background()
 	total, _ := client.ZCard(ctx, key).Result()
-	entries, nextCursor, err := client.ZScan(ctx, key, cursor, "*", count).Result()
+
+	var zsetEntries []ZSetEntry
+	scanCursor := cursor
+
+	for {
+		entries, nextCursor, err := client.ZScan(ctx, key, scanCursor, "*", count).Result()
+		if err != nil {
+			log.Printf("[Redis] ZSetScan: zscan failed, conn=%s, key=%s, err=%v", connID, key, err)
+			return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		}
+		for i := 0; i < len(entries); i += 2 {
+			score, _ := strconv.ParseFloat(entries[i+1], 64)
+			zsetEntries = append(zsetEntries, ZSetEntry{Member: entries[i], Score: score})
+		}
+		scanCursor = nextCursor
+		if !fetchAll || scanCursor == 0 || len(zsetEntries) >= maxEntries {
+			break
+		}
+	}
+
+	truncated := fetchAll && len(zsetEntries) >= maxEntries && int(total) > maxEntries
+	log.Printf("[Redis] ZSetScan: conn=%s, key=%s, total=%d, fetched=%d, fetchAll=%v, truncated=%v", connID, key, total, len(zsetEntries), fetchAll, truncated)
+	result := ZSetScanResult{Entries: zsetEntries, Total: int(total), Cursor: scanCursor, Truncated: truncated}
+	data, _ := json.Marshal(result)
+	return string(data)
+}
+
+// ZSetRange retrieves a page of sorted set entries by index (score-ordered).
+// Uses ZRANGE ... WITHSCORES for true index-based pagination.
+func (rs *RedisService) ZSetRange(connID, key string, start, stop int64) string {
+	client, err := rs.getClient(connID)
 	if err != nil {
-		log.Printf("[Redis] ZSetScan: zscan failed, conn=%s, key=%s, err=%v", connID, key, err)
+		log.Printf("[Redis] ZSetRange: conn=%s, key=%s, err=%v", connID, key, err)
 		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
 	}
 
-	log.Printf("[Redis] ZSetScan: conn=%s, key=%s, total=%d, fetched=%d", connID, key, total, len(entries)/2)
-
-	var zsetEntries []ZSetEntry
-	for i := 0; i < len(entries); i += 2 {
-		score, _ := strconv.ParseFloat(entries[i+1], 64)
-		zsetEntries = append(zsetEntries, ZSetEntry{Member: entries[i], Score: score})
+	ctx := context.Background()
+	total, _ := client.ZCard(ctx, key).Result()
+	entries, err := client.ZRangeWithScores(ctx, key, start, stop).Result()
+	if err != nil {
+		log.Printf("[Redis] ZSetRange: zrange failed, conn=%s, key=%s, err=%v", connID, key, err)
+		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
 	}
 
-	result := ZSetScanResult{Entries: zsetEntries, Total: int(total), Cursor: nextCursor}
+	var zsetEntries []ZSetEntry
+	for _, e := range entries {
+		zsetEntries = append(zsetEntries, ZSetEntry{Member: e.Member.(string), Score: e.Score})
+	}
+	if zsetEntries == nil {
+		zsetEntries = []ZSetEntry{}
+	}
+
+	log.Printf("[Redis] ZSetRange: conn=%s, key=%s, range=[%d,%d], total=%d, got=%d", connID, key, start, stop, total, len(zsetEntries))
+	result := ZSetScanResult{Entries: zsetEntries, Total: int(total)}
+	data, _ := json.Marshal(result)
+	return string(data)
+}
+
+// ZSetSearch searches sorted set members via ZSCAN MATCH pattern (backend search, no truncation limit).
+func (rs *RedisService) ZSetSearch(connID, key, pattern string) string {
+	client, err := rs.getClient(connID)
+	if err != nil {
+		log.Printf("[Redis] ZSetSearch: conn=%s, key=%s, err=%v", connID, key, err)
+		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+	}
+	if pattern == "" {
+		return `{"entries":[],"total":0}`
+	}
+
+	matchPattern := "*" + pattern + "*"
+	ctx := context.Background()
+
+	var zsetEntries []ZSetEntry
+	var scanCursor uint64
+	const maxEntries = 10000
+
+	for {
+		entries, nextCursor, err := client.ZScan(ctx, key, scanCursor, matchPattern, 1000).Result()
+		if err != nil {
+			log.Printf("[Redis] ZSetSearch: zscan failed, conn=%s, key=%s, pattern=%s, err=%v", connID, key, matchPattern, err)
+			return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+		}
+		for i := 0; i < len(entries); i += 2 {
+			score, _ := strconv.ParseFloat(entries[i+1], 64)
+			zsetEntries = append(zsetEntries, ZSetEntry{Member: entries[i], Score: score})
+		}
+		scanCursor = nextCursor
+		if scanCursor == 0 || len(zsetEntries) >= maxEntries {
+			break
+		}
+	}
+
+	if zsetEntries == nil {
+		zsetEntries = []ZSetEntry{}
+	}
+
+	log.Printf("[Redis] ZSetSearch: conn=%s, key=%s, pattern=%s, found=%d", connID, key, matchPattern, len(zsetEntries))
+	result := ZSetScanResult{Entries: zsetEntries, Total: len(zsetEntries)}
 	data, _ := json.Marshal(result)
 	return string(data)
 }

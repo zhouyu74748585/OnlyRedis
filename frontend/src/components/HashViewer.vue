@@ -4,9 +4,32 @@
     <div class="flex items-center justify-between px-3 py-1.5 bg-bg-secondary border-b border-gray-200">
       <div class="flex items-center gap-2">
         <Hash class="w-4 h-4 text-accent-orange" />
-        <span class="text-[13px] text-text-secondary">HASH ({{ totalFields }} fields)</span>
+        <span class="text-[13px] text-text-secondary">
+          HASH ({{ totalFields }} fields<template v-if="searchQuery">, {{ activeDataset.length }} matched<template v-if="searching">...</template></template>)
+        </span>
+        <span v-if="keyTTL !== undefined" class="text-[12px] text-text-muted">
+          TTL: {{ formatKeyTTL(keyTTL) }}
+        </span>
       </div>
       <button class="btn-primary" @click="showAdd = true">+ Add Field</button>
+    </div>
+
+    <!-- Search Bar -->
+    <div class="flex items-center gap-1.5 px-3 py-1 bg-bg-secondary border-b border-gray-200">
+      <Search class="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
+      <input
+        v-model="searchQuery"
+        class="flex-1 text-[12px] bg-transparent outline-none text-text-primary placeholder-text-muted"
+        placeholder="Search field or value..."
+      />
+      <button v-if="searchQuery" class="p-0.5 rounded hover:bg-gray-200 transition-colors" @click="searchQuery = ''">
+        <X class="w-3 h-3 text-text-muted" />
+      </button>
+    </div>
+
+    <!-- Truncated Warning -->
+    <div v-if="truncated" class="px-3 py-1.5 bg-yellow-50 border-b border-yellow-200 text-[12px] text-yellow-700">
+      ⚠ Showing first {{ pageSize * totalPages }} of {{ totalFields }} fields — data capped at 10,000 to avoid memory overflow
     </div>
 
     <!-- Table -->
@@ -16,7 +39,6 @@
           <tr class="border-b border-gray-200">
             <th class="text-left px-3 py-2 text-text-muted font-medium relative" :style="{ width: fieldWidth + 'px' }">
               Field
-              <!-- Resize handle -->
               <div
                 class="absolute right-0 top-0 bottom-0 w-[5px] cursor-col-resize hover:bg-accent-blue/20 transition-colors flex items-center justify-center group"
                 @mousedown.stop="startFieldResize"
@@ -30,11 +52,11 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-if="fields.length === 0">
+          <tr v-if="pagedFields.length === 0">
             <td :colspan="supportFieldTTL ? 4 : 3" class="text-center py-8 text-text-muted">No fields</td>
           </tr>
           <tr
-            v-for="(item, idx) in fields"
+            v-for="item in pagedFields"
             :key="item.field"
             class="border-b border-gray-100 hover:bg-gray-50 transition-colors"
           >
@@ -64,21 +86,21 @@
       </table>
     </div>
 
-    <!-- Pagination -->
-    <div v-if="totalFields > 100" class="flex items-center justify-between px-3 py-1.5 bg-bg-secondary border-t border-gray-200">
-      <span class="text-[12px] text-text-muted">Page {{ currentPage }}</span>
+    <!-- Pagination (client-side) -->
+    <div v-if="totalPages > 1" class="flex items-center justify-between px-3 py-1.5 bg-bg-secondary border-t border-gray-200">
+      <span class="text-[12px] text-text-muted">Page {{ currentPage }} / {{ totalPages }}</span>
       <div class="flex gap-1">
         <button
-          class="px-2 py-0.5 text-[12px] rounded border border-gray-300 text-text-secondary hover:bg-gray-100 transition-colors"
+          class="px-2 py-0.5 text-[12px] rounded border border-gray-300 text-text-secondary hover:bg-gray-100 transition-colors disabled:opacity-40"
           :disabled="currentPage <= 1"
-          @click="prevPage"
+          @click="currentPage--"
         >
           Prev
         </button>
         <button
-          class="px-2 py-0.5 text-[12px] rounded border border-gray-300 text-text-secondary hover:bg-gray-100 transition-colors"
-          :disabled="fields.length < 100"
-          @click="nextPage"
+          class="px-2 py-0.5 text-[12px] rounded border border-gray-300 text-text-secondary hover:bg-gray-100 transition-colors disabled:opacity-40"
+          :disabled="currentPage >= totalPages"
+          @click="currentPage++"
         >
           Next
         </button>
@@ -140,28 +162,42 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from 'vue'
-import { Hash, Trash } from 'lucide-vue-next'
+import { Hash, Trash, Search, X } from 'lucide-vue-next'
 import { useConnectionStore } from '../stores/connection'
 
 const props = defineProps<{ connId: string; keyName: string }>()
 
 const connectionStore = useConnectionStore()
 
-const fields = ref<{ field: string; value: string; ttl: number }[]>([])
+const allFields = ref<{ field: string; value: string; ttl: number }[]>([])
+const searchFields = ref<{ field: string; value: string; ttl: number }[]>([])
 const totalFields = ref(0)
 const currentPage = ref(1)
+const pageSize = 100
 const showAdd = ref(false)
 const newField = ref('')
 const newValue = ref('')
 
-// Edit value dialog state
 const showEdit = ref(false)
 const editingField = ref('')
 const editValue = ref('')
 
+const searchQuery = ref('')
+const searching = ref(false)
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 const fieldWidth = ref(200)
+const keyTTL = ref<number | undefined>()
+const truncated = ref(false)
 
-let nextCursor = 0
+// Active dataset: search results when query present, otherwise full dataset
+const activeDataset = computed(() =>
+  searchQuery.value ? searchFields.value : allFields.value
+)
+const totalPages = computed(() => Math.max(1, Math.ceil(activeDataset.value.length / pageSize)))
+const pagedFields = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return activeDataset.value.slice(start, start + pageSize)
+})
 
 // Check if Redis version >= 7.4.0 (HTTL support)
 const version = computed(() => connectionStore.redisVersions[props.connId] || '')
@@ -170,7 +206,6 @@ const supportFieldTTL = computed(() => {
   if (!v) return false
   const parts = v.split('.').map(Number)
   if (parts.length < 2) return false
-  // Compare major.minor: >= 7.4
   if (parts[0] > 7) return true
   if (parts[0] === 7 && parts[1] >= 4) return true
   return false
@@ -207,21 +242,36 @@ function formatTTL(ttl: number): string {
   return `${ttl}s`
 }
 
+function formatKeyTTL(t: number) {
+  if (t === -2) return 'n/a'
+  if (t === -1) return 'persistent'
+  if (t < 60) return `${t}s`
+  if (t < 3600) return `${Math.floor(t / 60)}m`
+  return `${Math.floor(t / 3600)}h`
+}
+
+async function loadKeyTTL() {
+  if (!props.connId || !props.keyName) return
+  const ttlVal = await window.go.main.App.GetTTL(props.connId, props.keyName)
+  keyTTL.value = ttlVal
+}
+
 async function loadFields() {
   if (!props.connId || !props.keyName) return
+  // count=-1 tells backend to fetch ALL fields in a SCAN loop
   const withTTL = supportFieldTTL.value
-  const raw = await window.go.main.App.HashScan(props.connId, props.keyName, nextCursor, 100, withTTL)
+  const raw = await window.go.main.App.HashScan(props.connId, props.keyName, 0, -1, withTTL)
   const result = JSON.parse(raw)
-  fields.value = result.fields || []
+  allFields.value = result.fields || []
   totalFields.value = result.total || 0
-  nextCursor = result.cursor || 0
+  truncated.value = result.truncated === true
+  loadKeyTTL()
 }
 
 async function updateField(field: string, value: string) {
   await window.go.main.App.HashSet(props.connId, props.keyName, field, value)
 }
 
-// === Edit Value Dialog ===
 function openEditDialog(item: { field: string; value: string }) {
   editingField.value = item.field
   editValue.value = item.value
@@ -231,7 +281,6 @@ function openEditDialog(item: { field: string; value: string }) {
 async function saveEditField() {
   await window.go.main.App.HashSet(props.connId, props.keyName, editingField.value, editValue.value)
   showEdit.value = false
-  // Refresh the fields to show updated value
   await loadFields()
 }
 
@@ -258,21 +307,40 @@ async function addField() {
   await loadFields()
 }
 
-function prevPage() {
-  if (currentPage.value > 1) {
-    currentPage.value--
-    nextCursor = 0
+// Backend search with debounce (300ms)
+async function doHashSearch() {
+  const q = searchQuery.value.trim()
+  if (!q || !props.connId || !props.keyName) {
+    searchFields.value = []
+    return
+  }
+  searching.value = true
+  const raw = await window.go.main.App.HashSearch(props.connId, props.keyName, q)
+  const result = JSON.parse(raw)
+  searchFields.value = result.fields || []
+  searching.value = false
+}
+
+// Debounce search input → backend call
+watch(searchQuery, () => {
+  currentPage.value = 1
+  if (searchTimer) clearTimeout(searchTimer)
+  if (!searchQuery.value.trim()) {
+    searchFields.value = []
+    return
+  }
+  searching.value = true
+  searchTimer = setTimeout(doHashSearch, 300)
+})
+
+watch(supportFieldTTL, (newVal) => {
+  if (newVal) {
     loadFields()
   }
-}
-
-function nextPage() {
-  currentPage.value++
-  loadFields()
-}
+})
 
 watch(() => props.keyName, () => {
-  nextCursor = 0
+  searchQuery.value = ''
   currentPage.value = 1
   fieldWidth.value = 200
   loadFields()

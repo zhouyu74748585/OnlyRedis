@@ -47,14 +47,14 @@
         :is="viewerComponent"
         :conn-id="props.connId"
         :key-name="keyStore.activeTab"
-        :key="keyStore.activeTab"
+        :key="keyStore.activeTab + ':' + refreshCounter"
       />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { X, RefreshCw, Trash, Database, MousePointerClick } from 'lucide-vue-next'
 import { useKeyStore } from '@/stores/key'
 import StringViewer from '@/components/StringViewer.vue'
@@ -65,6 +65,8 @@ import ZSetViewer from '@/components/ZSetViewer.vue'
 
 const props = defineProps<{ connId: string }>()
 const keyStore = useKeyStore()
+
+const refreshCounter = ref(0)
 
 const typeMap: Record<string, any> = {
   string: StringViewer,
@@ -86,12 +88,9 @@ function formatTabName(key: string) {
 }
 
 function refreshKey() {
-  // Force re-render by key change: delete from cache so viewer remounts
-  const current = keyStore.activeTab
-  if (current) {
-    delete keyStore.keyTypes[current]
-    // Trigger re-select with known type from search mode, or just use store data
-    // The TreeNode will re-emit select when clicked again
+  // Force re-mount viewer component by incrementing refresh counter
+  if (keyStore.activeTab) {
+    refreshCounter.value++
   }
 }
 

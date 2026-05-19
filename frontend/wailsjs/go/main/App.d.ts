@@ -29,7 +29,11 @@ export function HashDel(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function HashScan(arg1:string,arg2:string,arg3:number,arg4:number,arg5:boolean):Promise<string>;
 
+export function HashSearch(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function HashSet(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
+
+export function ListLen(arg1:string,arg2:string):Promise<number>;
 
 export function ListPush(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<number>;
 
@@ -49,6 +53,8 @@ export function SetMembers(arg1:string,arg2:string,arg3:number,arg4:number):Prom
 
 export function SetRemove(arg1:string,arg2:string,arg3:string):Promise<void>;
 
+export function SetSearch(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function SetStringValue(arg1:string,arg2:string,arg3:string,arg4:number):Promise<void>;
 
 export function SetTTL(arg1:string,arg2:string,arg3:number):Promise<void>;
@@ -65,6 +71,10 @@ export function UpdateConnection(arg1:string,arg2:string):Promise<void>;
 
 export function ZSetAdd(arg1:string,arg2:string,arg3:string,arg4:number):Promise<void>;
 
+export function ZSetRange(arg1:string,arg2:string,arg3:number,arg4:number):Promise<string>;
+
 export function ZSetRemove(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function ZSetScan(arg1:string,arg2:string,arg3:number,arg4:number):Promise<string>;
+
+export function ZSetSearch(arg1:string,arg2:string,arg3:string):Promise<string>;

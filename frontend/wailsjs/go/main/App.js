@@ -58,8 +58,16 @@ export function HashScan(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['HashScan'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function HashSearch(arg1, arg2, arg3) {
+  return window['go']['main']['App']['HashSearch'](arg1, arg2, arg3);
+}
+
 export function HashSet(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['HashSet'](arg1, arg2, arg3, arg4);
+}
+
+export function ListLen(arg1, arg2) {
+  return window['go']['main']['App']['ListLen'](arg1, arg2);
 }
 
 export function ListPush(arg1, arg2, arg3, arg4) {
@@ -98,6 +106,10 @@ export function SetRemove(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetRemove'](arg1, arg2, arg3);
 }
 
+export function SetSearch(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetSearch'](arg1, arg2, arg3);
+}
+
 export function SetStringValue(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SetStringValue'](arg1, arg2, arg3, arg4);
 }
@@ -130,10 +142,18 @@ export function ZSetAdd(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ZSetAdd'](arg1, arg2, arg3, arg4);
 }
 
+export function ZSetRange(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ZSetRange'](arg1, arg2, arg3, arg4);
+}
+
 export function ZSetRemove(arg1, arg2, arg3) {
   return window['go']['main']['App']['ZSetRemove'](arg1, arg2, arg3);
 }
 
 export function ZSetScan(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ZSetScan'](arg1, arg2, arg3, arg4);
+}
+
+export function ZSetSearch(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ZSetSearch'](arg1, arg2, arg3);
 }

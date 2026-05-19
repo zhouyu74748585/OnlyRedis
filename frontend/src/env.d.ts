@@ -34,18 +34,23 @@ interface Window {
         SetStringValue(connId: string, key: string, value: string, ttl: number): Promise<void>
         // Hash Operations
         HashScan(connId: string, key: string, cursor: number, count: number, withTTL: boolean): Promise<string>
+        HashSearch(connId: string, key: string, pattern: string): Promise<string>
         HashSet(connId: string, key: string, field: string, value: string): Promise<void>
         HashDel(connId: string, key: string, field: string): Promise<void>
         // List Operations
+        ListLen(connId: string, key: string): Promise<number>
         ListRange(connId: string, key: string, start: number, stop: number): Promise<string>
         ListPush(connId: string, key: string, value: string, left: boolean): Promise<number>
         ListRemove(connId: string, key: string, value: string, count: number): Promise<number>
         // Set Operations
         SetMembers(connId: string, key: string, cursor: number, count: number): Promise<string>
+        SetSearch(connId: string, key: string, pattern: string): Promise<string>
         SetAdd(connId: string, key: string, member: string): Promise<void>
         SetRemove(connId: string, key: string, member: string): Promise<void>
         // ZSet Operations
         ZSetScan(connId: string, key: string, cursor: number, count: number): Promise<string>
+        ZSetRange(connId: string, key: string, start: number, stop: number): Promise<string>
+        ZSetSearch(connId: string, key: string, pattern: string): Promise<string>
         ZSetAdd(connId: string, key: string, member: string, score: number): Promise<void>
         ZSetRemove(connId: string, key: string, member: string): Promise<void>
         // Monitor

@@ -145,6 +145,11 @@ func (a *App) HashScan(connID string, key string, cursor uint64, count int64, wi
 	return a.redis.HashScan(connID, key, cursor, count, withTTL)
 }
 
+// HashSearch searches hash field names via HSCAN MATCH
+func (a *App) HashSearch(connID string, key string, pattern string) string {
+	return a.redis.HashSearch(connID, key, pattern)
+}
+
 // HashSet sets a hash field
 func (a *App) HashSet(connID string, key string, field string, value string) error {
 	return a.redis.HashSet(connID, key, field, value)
@@ -160,6 +165,11 @@ func (a *App) HashDel(connID string, key string, field string) error {
 // ListRange retrieves list elements
 func (a *App) ListRange(connID string, key string, start int64, stop int64) string {
 	return a.redis.ListRange(connID, key, start, stop)
+}
+
+// ListLen returns the length of a list
+func (a *App) ListLen(connID string, key string) int64 {
+	return a.redis.ListLen(connID, key)
 }
 
 // ListPush pushes elements to a list
@@ -179,6 +189,11 @@ func (a *App) SetMembers(connID string, key string, cursor uint64, count int64) 
 	return a.redis.SetMembers(connID, key, cursor, count)
 }
 
+// SetSearch searches set members via SSCAN MATCH
+func (a *App) SetSearch(connID string, key string, pattern string) string {
+	return a.redis.SetSearch(connID, key, pattern)
+}
+
 // SetAdd adds a member to a set
 func (a *App) SetAdd(connID string, key string, member string) error {
 	return a.redis.SetAdd(connID, key, member)
@@ -194,6 +209,16 @@ func (a *App) SetRemove(connID string, key string, member string) error {
 // ZSetScan scans sorted set entries
 func (a *App) ZSetScan(connID string, key string, cursor uint64, count int64) string {
 	return a.redis.ZSetScan(connID, key, cursor, count)
+}
+
+// ZSetRange retrieves a page of sorted set entries by index
+func (a *App) ZSetRange(connID string, key string, start int64, stop int64) string {
+	return a.redis.ZSetRange(connID, key, start, stop)
+}
+
+// ZSetSearch searches sorted set members via ZSCAN MATCH
+func (a *App) ZSetSearch(connID string, key string, pattern string) string {
+	return a.redis.ZSetSearch(connID, key, pattern)
 }
 
 // ZSetAdd adds an entry to a sorted set
