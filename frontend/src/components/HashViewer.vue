@@ -11,7 +11,15 @@
           TTL: {{ formatKeyTTL(keyTTL) }}
         </span>
       </div>
-      <button class="btn-primary" @click="showAdd = true">+ Add Field</button>
+      <div class="flex items-center gap-2">
+        <button class="px-2 py-1 rounded border border-gray-300 text-text-secondary hover:bg-gray-100 transition-colors" title="Refresh" @click="emit('refresh')">
+          <RefreshCw class="w-3.5 h-3.5" />
+        </button>
+        <button class="px-2 py-1 rounded border border-red-200 text-accent-red/70 hover:bg-red-50 transition-colors" title="Delete Key" @click="emit('delete')">
+          <Trash class="w-3.5 h-3.5" />
+        </button>
+        <button class="btn-primary" @click="showAdd = true">+ Add Field</button>
+      </div>
     </div>
 
     <!-- Search Bar -->
@@ -162,10 +170,11 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from 'vue'
-import { Hash, Trash, Search, X } from 'lucide-vue-next'
+import { Hash, Trash, Search, X, RefreshCw } from 'lucide-vue-next'
 import { useConnectionStore } from '../stores/connection'
 
 const props = defineProps<{ connId: string; keyName: string }>()
+const emit = defineEmits(['refresh', 'delete'])
 
 const connectionStore = useConnectionStore()
 

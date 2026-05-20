@@ -16,6 +16,12 @@
         >
           Format JSON
         </button>
+        <button class="px-2 py-1 rounded border border-gray-300 text-text-secondary hover:bg-gray-100 transition-colors" title="Refresh" @click="emit('refresh')">
+          <RefreshCw class="w-3.5 h-3.5" />
+        </button>
+        <button class="px-2 py-1 rounded border border-red-200 text-accent-red/70 hover:bg-red-50 transition-colors" title="Delete Key" @click="emit('delete')">
+          <Trash class="w-3.5 h-3.5" />
+        </button>
         <button class="btn-primary" @click="saveValue">Save</button>
       </div>
     </div>
@@ -54,9 +60,10 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
-import { Type } from 'lucide-vue-next'
+import { Type, RefreshCw, Trash } from 'lucide-vue-next'
 
 const props = defineProps<{ connId: string; keyName: string }>()
+const emit = defineEmits(['refresh', 'delete'])
 
 const value = ref('')
 const ttl = ref<number | undefined>()

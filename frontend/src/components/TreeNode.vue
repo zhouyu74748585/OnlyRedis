@@ -51,6 +51,14 @@
         <span class="w-3.5 h-3.5 flex-shrink-0" />
         <span class="text-[12px] truncate flex-1">Load more...</span>
       </div>
+      <!-- Empty indicator: folder has no children and loading finished -->
+      <div
+        v-if="node.children.length === 0 && !node.loading && !node.hasMore"
+        class="py-1 select-none"
+        :style="{ paddingLeft: ((depth + 1) * 16 + 4) + 'px' }"
+      >
+        <span class="text-[12px] text-text-muted italic">Empty</span>
+      </div>
     </template>
   </div>
 </template>
